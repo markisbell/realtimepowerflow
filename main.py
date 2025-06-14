@@ -61,6 +61,10 @@ class LoadUpdate(BaseModel):
     q_mvar: Optional[float] = Field(default=None, description="Reactive power in MVAr")
     phase: str = Field(default="all", regex="^(all|a|b|c)$", description="Phase for asymmetric loads")
 
+class PhaseModeRequest(BaseModel):
+    """Request to switch phase mode"""
+    three_phase: bool = Field(..., description="Enable three-phase mode")
+
 @dataclass
 class SimulationState:
     """Internal simulation state"""
@@ -397,7 +401,7 @@ class KafkaStreamer:
         
         try:
             future = self.producer.send(
-                result.kafka_topic if hasattr(result, 'kafka_topic') else 'powerflow_results',
+                'powerflow_results',  # Use a fixed topic name
                 value=result.model_dump(),
                 key=result.node_id.encode('utf-8')
             )
@@ -703,4 +707,86 @@ async def update_load(load_update: LoadUpdate):
         message = simulator.update_load(load_update)
         return {"message": message}
     except Exception as e:
-        raise
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/network/phase-mode", tags=["Network"])
+async def switch_phase_mode(request: PhaseModeRequest):
+    """Switch between single-phase and three-phase modes"""
+    try:
+        message = simulator.switch_phase_mode(request.three_phase)
+        return {"message": message, "three_phase_mode": request.three_phase}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/coupling/status", tags=["Coupling"])
+async def get_coupling_status():
+    """Get coupling status if available"""
+    try:
+        if hasattr(simulator.engine, 'coupling_manager'):
+            return simulator.engine.coupling_manager.get_status()
+        else:
+            return {"enabled": False, "message": "Coupling not configured"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/coupling/control", tags=["Coupling"])
+async def control_coupling(action: str):
+    """Enable or disable coupling"""
+    try:
+        if not hasattr(simulator.engine, 'coupling_manager'):
+            raise HTTPException(status_code=400, detail="Coupling not configured")
+        
+        if action == "enable":
+            simulator.engine.coupling_manager.enable_coupling()
+            return {"message": "Coupling enabled"}
+        elif action == "disable":
+            simulator.engine.coupling_manager.disable_coupling()
+            return {"message": "Coupling disabled"}
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action. Use 'enable' or 'disable'")
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import os
+    
+    # Configuration from environment variables
+    host = os.getenv("API_HOST", "0.0.0.0")
+    port = int(os.getenv("API_PORT", "8000"))
+    
+    # Optional coupling configuration
+    coupling_enabled = os.getenv("COUPLING_ENABLED", "false").lower() == "true"
+    
+    if coupling_enabled:
+        # Import and configure coupling
+        try:
+            from grid_coupling import create_coupled_simulator, CouplingConfig
+            
+            coupling_config = {
+                'node_id': os.getenv("NODE_ID", "pi_node_1"),
+                'boundary_buses': [int(x) for x in os.getenv("BOUNDARY_BUSES", "0,3").split(",")],
+                'neighbor_nodes': os.getenv("NEIGHBOR_NODES", "").split(",") if os.getenv("NEIGHBOR_NODES") else [],
+                'coupling_topic': os.getenv("COUPLING_TOPIC", "grid_coupling"),
+                'max_iterations': int(os.getenv("MAX_ITERATIONS", "10")),
+                'convergence_tolerance': float(os.getenv("CONVERGENCE_TOLERANCE", "1e-6")),
+                'enabled': True
+            }
+            
+            simulator, coupling_manager = create_coupled_simulator(simulator, coupling_config)
+            
+            # Initialize coupling Kafka
+            try:
+                coupling_manager.initialize_kafka()
+                logger.info("Coupling system initialized successfully")
+            except Exception as e:
+                logger.warning(f"Coupling Kafka initialization failed: {e}")
+                
+        except ImportError:
+            logger.warning("Grid coupling module not available")
+        except Exception as e:
+            logger.error(f"Failed to initialize coupling: {e}")
+    
+    # Start the application
+    logger.info(f"Starting Power Flow Simulator API v2.0 on {host}:{port}")
+    uvicorn.run(app, host=host, port=port)
