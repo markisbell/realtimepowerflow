@@ -1,0 +1,29 @@
+{
+    "default_config": {
+        "network_type": "microgrid",
+        "update_frequency": 1.0,
+        "kafka_topic": "powerflow_results",
+        "node_id": "pi_node_1",
+        "coupling_buses": null
+    },
+    "network_types": {
+        "microgrid": {
+            "description": "Small microgrid with solar PV",
+            "recommended_frequency": 1.0
+        },
+        "simple_four_bus": {
+            "description": "Basic four-bus test system",
+            "recommended_frequency": 2.0
+        },
+        "ieee_case": {
+            "description": "IEEE 9-bus test case",
+            "recommended_frequency": 0.5
+        }
+    },
+    "coupling_configuration": {
+        "enabled": false,
+        "boundary_buses": [],
+        "neighbor_nodes": [],
+        "exchange_topic": "grid_coupling"
+    }
+}
